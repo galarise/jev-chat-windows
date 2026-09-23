@@ -8,6 +8,7 @@ OpenRouter key 在独立设置页填写，不用改代码。IDE 里直接 Run。
 """
 import ctypes
 import multiprocessing
+import os
 import queue
 import threading
 import traceback
@@ -231,6 +232,12 @@ if __name__ == "__main__":  # Windows 的 spawn 会让子进程重新执行本�
         store.init()  # 首次启动建库；建不出来也继续，engine 对库的读取本来就是容错的
     except Exception:
         traceback.print_exc()
+    # 判断层端点/模型：core/jev_client 只认环境变量，这里把 config.json 里的值兜过去。
+    # 环境变量优先（方便按机器覆盖）；config.json 的改动下次启动生效。
+    for env, value in (("JEVC_JUDGE_URL", settings.judge_url()),
+                       ("JEVC_JUDGE_MODEL", settings.judge_model())):
+        if value and not os.environ.get(env):
+            os.environ[env] = value
     q = multiprocessing.Queue()
     capture_on = multiprocessing.Event()  # 父子进程共用的开关，置位=采集
     ov = Overlay(on_fill=fill_reply, on_toggle_capture=on_toggle_capture,

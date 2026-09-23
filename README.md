@@ -175,6 +175,10 @@ python main.py
 
 PyCharm / VS Code 里直接 Run `main.py` 也行。
 
+想换判断层端点（比如走第三方 Jev 代理）不用改代码，启动前设两个环境变量即可：
+`JEVC_JUDGE_URL` 和 `JEVC_JUDGE_MODEL`，**必须一起设**（只设一个不生效）。也可以写进 `config.json` 的
+同名键，`main.py` 启动时会兜到环境变量上——但环境变量优先，且 `config.json` 的改动下次启动才生效。
+
 > 策略库不导入也能跑，只是判断层拿不到策略注入，候选会退化成只看对话本身。
 > 想扩充职场策略走 `--clone`：克隆 [gaoqingshang-skill](https://github.com/wanghoween-design/gaoqingshang-skill)
 > 解析里面的场景文档，加 `--llm` 会用 DeepSeek 提炼英文摘要（需要 `DEEPSEEK_API_KEY`）。
@@ -263,6 +267,7 @@ tools/
   import_strategies.py  策略种子导入 SQLite（`--check` 只校验覆盖率，不写库）
   preview_ui.py         用合成数据预览界面，不采集不联网不碰微信；可 --screenshot 出图
   make_icon.py          生成 docs/icon.ico（打包图标），图标已提交，换颜色才用重跑
+run-app.bat             本机启动入口：从 key 目录读密钥后拉起界面（pythonw，不留控制台窗口）
 run-demo.bat            本机验证辅助：从 key 目录读密钥后跑 demo（纯 ASCII；非上游发行物）
 data/jev.db             本机数据库（策略 + 消息 + 联系人），不进仓库
 probe/                  一次性探针，结论已写进本文，留着是为了可复现
