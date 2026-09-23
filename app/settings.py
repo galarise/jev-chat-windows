@@ -18,7 +18,8 @@ _DEFAULT_RELATIONSHIP = "romantic partners"
 _DEFAULT_CONTEXT = 10
 _ENV = "OPENROUTER_API_KEY"
 _DEEPSEEK_ENV = "DEEPSEEK_API_KEY"
-_PROVIDERS = ("openrouter", "deepseek")
+_OPENCODE_ENV = "OPENCODE_API_KEY"
+_PROVIDERS = ("opencode-go", "openrouter", "deepseek")
 
 def relationship() -> str:
     """每次都重新读文件，改设置不用重启进程。"""
@@ -46,13 +47,68 @@ def style() -> str:
         return ""
 
 def draft_provider() -> str:
-    """起草走哪家：openrouter（默认）或 deepseek 直连。判断/排序永远走 OpenRouter。"""
+    """生成层（起草）走哪家：opencode-go 订阅（默认）/ openrouter / deepseek 直连。"""
     try:
         with open(_CONFIG, encoding="utf-8") as f:
             v = json.load(f).get("draft_provider")
     except (OSError, ValueError):
         return _PROVIDERS[0]
     return v if v in _PROVIDERS else _PROVIDERS[0]
+
+
+def draft_url() -> str:
+    """生成层自定义端点（可配项）；空 = 用 provider 内置 URL。"""
+    try:
+        with open(_CONFIG, encoding="utf-8") as f:
+            return str(json.load(f).get("draft_url") or "")
+    except (OSError, ValueError):
+        return ""
+
+
+def draft_model() -> str:
+    """生成层自定义模型 id；空 = 用 provider 内置默认模型。"""
+    try:
+        with open(_CONFIG, encoding="utf-8") as f:
+            return str(json.load(f).get("draft_model") or "")
+    except (OSError, ValueError):
+        return ""
+
+
+def judge_url() -> str:
+    """判断层端点（可配项）；空 = Jev 官方 openrouter decisions API。"""
+    try:
+        with open(_CONFIG, encoding="utf-8") as f:
+            return str(json.load(f).get("judge_url") or "")
+    except (OSError, ValueError):
+        return ""
+
+
+def judge_model() -> str:
+    """判断层模型 id（可配项）；空 = typesafe/jev-1.13。"""
+    try:
+        with open(_CONFIG, encoding="utf-8") as f:
+            return str(json.load(f).get("judge_model") or "")
+    except (OSError, ValueError):
+        return ""
+
+
+def default_domain() -> str:
+    """全局默认域（联系人没覆盖、无职场信号时用）：'work' | 'romance'。"""
+    try:
+        with open(_CONFIG, encoding="utf-8") as f:
+            v = json.load(f).get("default_domain")
+    except (OSError, ValueError):
+        return "romance"
+    return v if v in ("work", "romance") else "romance"
+
+
+def store_history() -> bool:
+    """本地存档开关：OCR 消息文本存 SQLite（用户自己聊天记录的本地存档）。默认开。"""
+    try:
+        with open(_CONFIG, encoding="utf-8") as f:
+            return bool(json.load(f).get("store_history", True))
+    except (OSError, ValueError):
+        return True
 
 def reply_target() -> bool:
     """群聊指定回复对象：开了才在界面上选回复给谁、才把对象喂给模型。默认关。"""
@@ -110,20 +166,49 @@ def deepseek_key() -> str:
 def has_deepseek_key() -> bool:
     return bool(deepseek_key())
 
+def opencode_key() -> str:
+    return _get_key(_OPENCODE_ENV)
+
+def has_opencode_key() -> bool:
+    return bool(opencode_key())
+
 def save(key_text: str | None, relationship_text: str, context_n: int | None = None,
          deepseek_key_text: str | None = None, provider_text: str | None = None,
          reply_target_on: bool | None = None, style_text: str | None = None,
-         thinking_on: bool | None = None) -> None:
-    """每个参数为空/None = 保留当前值。两个 key 都只写进程环境 + HKCU\\Environment，不写任何文件。"""
+         thinking_on: bool | None = None, opencode_key_text: str | None = None,
+         draft_url_text: str | None = None, draft_model_text: str | None = None,
+         judge_url_text: str | None = None, judge_model_text: str | None = None,
+         domain_text: str | None = None, store_history_on: bool | None = None) -> None:
+    """每个参数为空/None = 保留当前值。key 只写进程环境 + HKCU\\Environment，不写任何文件；
+    URL/model/domain 等非密钥项落 config.json。"""
     if key_text:
         _set_key(_ENV, key_text)
     if deepseek_key_text:
         _set_key(_DEEPSEEK_ENV, deepseek_key_text)
+    if opencode_key_text:
+        _set_key(_OPENCODE_ENV, opencode_key_text)
     n = context() if context_n is None else max(3, min(30, int(context_n)))
     provider = provider_text if provider_text in _PROVIDERS else draft_provider()  # None 或脏值 = 保留原来的
     target = reply_target() if reply_target_on is None else bool(reply_target_on)
     style_v = style() if style_text is None else str(style_text).strip()  # 空串 = 清掉
     think = thinking() if thinking_on is None else bool(thinking_on)
+    domain_v = domain_text if domain_text in ("work", "romance") else default_domain()
+    hist = store_history() if store_history_on is None else bool(store_history_on)
+    old = {}
+    try:
+        with open(_CONFIG, encoding="utf-8") as f:
+            old = json.load(f)
+    except (OSError, ValueError):
+        pass
+    def _opt(cur_key, new_text, getter):
+        if new_text is None:
+            return getter()
+        return str(new_text).strip()
     with open(_CONFIG, "w", encoding="utf-8") as f:
         json.dump({"relationship": relationship_text, "context": n, "draft_provider": provider,
-                   "reply_target": target, "style": style_v, "thinking": think}, f, ensure_ascii=False)
+                   "reply_target": target, "style": style_v, "thinking": think,
+                   "draft_url": _opt("draft_url", draft_url_text, draft_url),
+                   "draft_model": _opt("draft_model", draft_model_text, draft_model),
+                   "judge_url": _opt("judge_url", judge_url_text, judge_url),
+                   "judge_model": _opt("judge_model", judge_model_text, judge_model),
+                   "default_domain": domain_v, "store_history": hist}, f, ensure_ascii=False)

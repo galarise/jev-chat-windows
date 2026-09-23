@@ -42,6 +42,23 @@ _RELATIONSHIPS = [
     ("恋人", "romantic partners"), ("朋友", "friends"), ("同事", "colleagues"),
     ("家人", "family"), ("自定义", None),
 ]
+# 起草来源三档，顺序即下拉框顺序（第一项是 settings 的默认值）
+_PROVIDER_UI = (
+    ("opencode-go", "OpenCode GO 订阅（DeepSeek V4.1 Flash，需 OpenCode GO 密钥）"),
+    ("openrouter", "OpenRouter（DeepSeek V4.1 Flash，用上面同一个 key）"),
+    ("deepseek", "DeepSeek 直连（更快，需要 DeepSeek key）"),
+)
+# 场景域两档，取值与 settings.default_domain() 一一对应
+_DOMAIN_UI = (("romance", "恋爱 / 人际"), ("work", "职场 / 工作"))
+# 界面上展示域的中文名（show() 用）
+_DOMAIN_LABEL = {"romance": "恋爱/人际", "work": "职场/工作"}
+
+
+def _index_of(pairs, name):
+    for i, (key, _) in enumerate(pairs):
+        if key == name:
+            return i
+    return 0
 
 
 def _choice(answers, name):
@@ -352,6 +369,9 @@ class Overlay:
         insight_box.addWidget(self.summary)
         self.intent = _label("", 12, _MUTED)
         insight_box.addWidget(self.intent)
+        self.policy = _label("", 11, _MUTED)  # 命中的域 + 召回的场景编号，让策略来源可追溯
+        self.policy.setWordWrap(True)
+        insight_box.addWidget(self.policy)
         self.insight.setToolTip("根据当前聊天片段推测，可能理解有偏差。紧张度为 0–9 的参考评分。")
         self.insight.hide()
         body.addWidget(self.insight)
@@ -455,6 +475,29 @@ class Overlay:
         box.addWidget(self._hint(
             "开了以后群聊里可以选回复给谁，候选会针对 TA 写，填入时可带 @。关了就正常回复。"
         ))
+        domain_row = QHBoxLayout()
+        domain_row.addWidget(_label("默认场景域", 13), 1)
+        self.domainBox = ComboBox()
+        self.domainBox.setMinimumWidth(0)
+        self.domainBox.addItems([label for _, label in _DOMAIN_UI])
+        self.domainBox.setAccessibleName("默认场景域")
+        domain_row.addWidget(self.domainBox)
+        box.addLayout(domain_row)
+        box.addWidget(self._hint(
+            "联系人的域没记过、也没从关系背景里看出职场信号时，按这个域取题集和策略库。"
+        ))
+        store_row = QHBoxLayout()
+        store_row.addWidget(_label("本地存聊天记录", 13), 1)
+        self.storeSwitch = SwitchButton()
+        self.storeSwitch.setOnText("开")
+        self.storeSwitch.setOffText("关")
+        self.storeSwitch.setAccessibleName("本地存聊天记录")
+        store_row.addWidget(self.storeSwitch)
+        box.addLayout(store_row)
+        box.addWidget(self._hint(
+            "把识别到的消息文本存进本机 SQLite，供「先核对聊天记录」这类判断翻更早的话。"
+            "只存本机，关掉后判断与起草只看当前窗口。"
+        ))
         body.addWidget(preference)
 
         connection = _Surface()
@@ -479,11 +522,27 @@ class Overlay:
         box.addWidget(provider_label)
         self.providerBox = ComboBox()
         self.providerBox.setMinimumWidth(0)  # 选项文字很长，别让它撑开设置页
-        self.providerBox.addItems(["OpenRouter（DeepSeek V4.1 Flash，用上面同一个 key）",
-                                   "DeepSeek 直连（更快，需要 DeepSeek key）"])
+        self.providerBox.addItems([label for _, label in _PROVIDER_UI])
         self.providerBox.setAccessibleName("起草模型来源")
         provider_label.setBuddy(self.providerBox)
         box.addWidget(self.providerBox)
+        oc_heading = QHBoxLayout()
+        oc_label = _label("OpenCode GO 密钥", 13)
+        oc_heading.addWidget(oc_label, 1)
+        self.ocKeyState = _label("", 12, _GREEN)
+        self.ocKeyState.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        oc_heading.addWidget(self.ocKeyState)
+        box.addLayout(oc_heading)
+        self.ocKeyEdit = PasswordLineEdit()
+        self.ocKeyEdit.setAccessibleName("OpenCode GO API 密钥")
+        oc_label.setBuddy(self.ocKeyEdit)
+        self.ocKeyEdit.returnPressed.connect(self._save)
+        box.addWidget(self.ocKeyEdit)
+        self.ocHint = _label("OpenCode GO 订阅 key（存进 OPENCODE_API_KEY）。已配置时留空保留当前密钥。",
+                             12, _MUTED)
+        box.addWidget(self.ocHint)
+        # 只有选了 GO 订阅才显示这一组；ocHint 额外还要看紧凑模式，单独存，不进 _hintLabels
+        self._ocWidgets = (oc_label, self.ocKeyState, self.ocKeyEdit)
         ds_heading = QHBoxLayout()
         ds_label = _label("DeepSeek API 密钥", 13)
         ds_heading.addWidget(ds_label, 1)
@@ -536,14 +595,19 @@ class Overlay:
         return label
 
     def _sync_ds_fields(self):
-        """DeepSeek 那组字段：选了直连才显示；说明文字紧凑模式下再多加一条限制。
+        """按起草来源显隐对应的密钥组（OpenCode GO / DeepSeek 各一组）；说明文字紧凑模式下再收起。
         顺带把 providerBox 按钮上的文字按紧凑模式省略——它是 QPushButton，
         minimumSizeHint 跟 sizeHint 一样是按整段文字算的，不会自动换行/省略，
-        选项文字很长（"OpenRouter（DeepSeek V4.1 Flash，用上面同一个 key）"）时会把设置页撑宽。"""
-        deepseek = self.providerBox.currentIndex() == 1
+        选项文字很长（"OpenCode GO 订阅（DeepSeek V4.1 Flash，需 OpenCode GO 密钥）"）时会把设置页撑宽。"""
+        provider = _PROVIDER_UI[self.providerBox.currentIndex()][0]
+        deepseek = provider == "deepseek"
+        opencode = provider == "opencode-go"
         for w in self._dsWidgets:
             w.setVisible(deepseek)
         self.dsHint.setVisible(deepseek and not self._compact)
+        for w in self._ocWidgets:
+            w.setVisible(opencode)
+        self.ocHint.setVisible(opencode and not self._compact)
         full = self.providerBox.currentText()
         if self._compact:
             full = self.providerBox.fontMetrics().elidedText(full, Qt.ElideRight, 200)
@@ -562,13 +626,18 @@ class Overlay:
         self.keyEdit.clear()
         self.keyEdit.setPlaceholderText("已配置，留空保留" if settings.has_key() else "输入你的 API 密钥")
         self.keyState.setText("已配置" if settings.has_key() else "未配置")
-        deepseek = settings.draft_provider() == "deepseek"
-        self.providerBox.setCurrentIndex(1 if deepseek else 0)
+        self.providerBox.setCurrentIndex(_index_of(_PROVIDER_UI, settings.draft_provider()))
         self.dsKeyEdit.clear()
         self.dsKeyEdit.setPlaceholderText(
             "已配置，留空保留" if settings.has_deepseek_key() else "输入你的 DeepSeek 密钥")
         self.dsKeyState.setText("已配置" if settings.has_deepseek_key() else "未配置")
+        self.ocKeyEdit.clear()
+        self.ocKeyEdit.setPlaceholderText(
+            "已配置，留空保留" if settings.has_opencode_key() else "输入你的 OpenCode GO 密钥")
+        self.ocKeyState.setText("已配置" if settings.has_opencode_key() else "未配置")
         self.thinkingSwitch.setChecked(settings.thinking())
+        self.domainBox.setCurrentIndex(_index_of(_DOMAIN_UI, settings.default_domain()))
+        self.storeSwitch.setChecked(settings.store_history())
         self._sync_ds_fields()  # setCurrentIndex 没变就不发信号，这里补一次
         self.settingsFeedback.hide()
 
@@ -576,8 +645,9 @@ class Overlay:
         relationship = _RELATIONSHIPS[self.relationshipBox.currentIndex()][1]
         relationship = relationship or self.relEdit.text().strip()
         key = self.keyEdit.text().strip()
-        provider = "deepseek" if self.providerBox.currentIndex() == 1 else "openrouter"
+        provider = _PROVIDER_UI[self.providerBox.currentIndex()][0]
         deepseek_key = self.dsKeyEdit.text().strip()
+        opencode_key = self.ocKeyEdit.text().strip()
         if not relationship:
             self._settings_feedback("请填写关系背景，或选择一个已有选项。", error=True)
             self.relEdit.setFocus()
@@ -590,12 +660,19 @@ class Overlay:
             self._settings_feedback("选了 DeepSeek 直连就得填 DeepSeek API 密钥。", error=True)
             self.dsKeyEdit.setFocus()
             return
+        if provider == "opencode-go" and not opencode_key and not settings.has_opencode_key():
+            self._settings_feedback("选了 OpenCode GO 订阅就得填 OpenCode GO 密钥。", error=True)
+            self.ocKeyEdit.setFocus()
+            return
         try:
             settings.save(key or None, relationship, self.contextBox.value(),
                           deepseek_key or None, provider,
                           reply_target_on=self.targetSwitch.isChecked(),
                           style_text=self.styleEdit.text().strip(),
-                          thinking_on=self.thinkingSwitch.isChecked())
+                          thinking_on=self.thinkingSwitch.isChecked(),
+                          opencode_key_text=opencode_key or None,
+                          domain_text=_DOMAIN_UI[self.domainBox.currentIndex()][0],
+                          store_history_on=self.storeSwitch.isChecked())
         except Exception:
             self._settings_feedback("保存失败，请检查配置文件是否可写后重试。", error=True)
             return
@@ -890,6 +967,14 @@ class Overlay:
         self.summary.setText("建议：" + _choice(answers, "best_action"))
         self.intent.setText("可能意图 · " + _choice(answers, "true_intent") +
                             "\n可能需要 · " + _choice(answers, "she_needs"))
+        domain_text = _DOMAIN_LABEL.get(result.get("domain"))
+        codes = [s.get("scenario_code") for s in (result.get("strategies") or [])
+                 if s.get("scenario_code")]
+        if domain_text:
+            self.policy.setText(
+                "策略库 · " + domain_text +
+                ("（" + " ".join(codes) + "）" if codes else "（未召回，按通用题集判断）"))
+        self.policy.setVisible(bool(domain_text))
         score = (answers.get("danger_level") or {}).get("score")
         valid_score = isinstance(score, (int, float)) and isfinite(score) and 0 <= score <= 9
         self.tension.setText(f"紧张度 {score:.0f}/9" if valid_score else "紧张度待判断")

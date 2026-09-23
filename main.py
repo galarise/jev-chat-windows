@@ -17,6 +17,7 @@ from app import settings, worker
 from app.capture import find_wechat_hwnd
 from app.fill import fill
 from app.overlay import Overlay
+from core import store
 from core.engine import analyze
 
 # {会话名: {history, result, rev, target, senders}}：每个会话各自的上下文、上次结果和版本号，互不串味
@@ -79,18 +80,24 @@ def analyze_bg(msgs, title, revision, reply_to=None):
     try:
         results.put(("ok", analyze(msgs, settings.relationship(), context=settings.context(),
                                    provider=settings.draft_provider(), reply_to=reply_to,
-                                   style=settings.style(), thinking=settings.thinking()),
+                                   style=settings.style(), thinking=settings.thinking(),
+                                   chat_key=title,
+                                   default_domain=settings.default_domain()),
                      title, revision))
     except Exception as e:
         results.put(("err", f"分析失败: {e}", title, revision))
 
 
 def start_analyze(title, msgs):
-    if not settings.has_key():
+    provider = settings.draft_provider()
+    if provider == "openrouter" and not settings.has_key():
         ov.set_status("请先在设置中配置回复服务", "warning")
         return
-    if settings.draft_provider() == "deepseek" and not settings.has_deepseek_key():
+    if provider == "deepseek" and not settings.has_deepseek_key():
         ov.set_status("选了 DeepSeek 直连但没填 DeepSeek 密钥，去设置里补上", "warning")
+        return
+    if provider == "opencode-go" and not settings.has_opencode_key():
+        ov.set_status("选了 OpenCode GO 订阅但没填 OPENCODE_API_KEY，去设置里补上", "warning")
         return
     state["busy"] = True
     ov.set_busy(True)
@@ -159,6 +166,8 @@ def drain():
         chat["rev"] += 1  # 这个会话有新消息了，它在跑的分析作废
         if title == ov.current_chat():  # 看的是别的会话就别把人家的候选划掉
             ov.invalidate_replies()
+        archiving = settings.store_history()
+        archive = []
         for who, name, text in new:
             chat["history"].append((who, text, name))
             ov.log_message(who, text, name, chat=title)
@@ -166,6 +175,13 @@ def drain():
                 if name in chat["senders"]:
                     chat["senders"].remove(name)
                 chat["senders"].insert(0, name)
+            if archiving:  # 本地存档：engine 的 prior_context / check_history 两步法都靠它
+                archive.append((who, text))  # 库里 sender 只认 her/me，与 engine 消费端保持一致
+        if archive:
+            try:
+                store.append_messages(title, archive)
+            except Exception:
+                traceback.print_exc()  # 存档失败不该挡正常回复
         ov.set_targets(title, chat["senders"], target_of(title))  # 显不显示这一行由悬浮窗按开关决定
         if new[-1][0] == "her":  # 只有对方最新说话才值得分析
             msgs = list(chat["history"])
@@ -211,6 +227,10 @@ def tick():
 if __name__ == "__main__":  # Windows 的 spawn 会让子进程重新执行本文件，没这行就无限套娃开进程
     multiprocessing.freeze_support()  # 打包成 exe 后 spawn 出来的子进程会重跑一遍 exe，没这行就无限弹界面
     ctypes.windll.user32.SetProcessDPIAware()
+    try:
+        store.init()  # 首次启动建库；建不出来也继续，engine 对库的读取本来就是容错的
+    except Exception:
+        traceback.print_exc()
     q = multiprocessing.Queue()
     capture_on = multiprocessing.Event()  # 父子进程共用的开关，置位=采集
     ov = Overlay(on_fill=fill_reply, on_toggle_capture=on_toggle_capture,
@@ -224,7 +244,7 @@ if __name__ == "__main__":  # Windows 的 spawn 会让子进程重新执行本�
     else:
         capture_on.set()
         child = spawn_worker()
-    if not settings.has_key():
+    if not settings.has_key() and not settings.has_opencode_key():
         ov.set_status("请先在设置中配置回复服务", "warning")
         ov.after(0, ov.open_settings)
     ov.after(50, tick)

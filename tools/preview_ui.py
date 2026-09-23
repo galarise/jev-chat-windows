@@ -9,8 +9,12 @@
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 from pathlib import Path
 from unittest.mock import patch
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import settings
 
@@ -55,6 +59,14 @@ _RESULT = {
     },
     "usage": {},
     "reply_to": "阿杰",  # 跟 _SENDERS[0] 一致，让「回复给 …」那行在演示里看得见
+    "domain": "romance",  # 域路由结果 + 召回的策略，判断摘要下面那行「策略库 · …」用
+    "strategies": [
+        {"scenario_code": "R01", "title": "破冰开场"},
+        {"scenario_code": "R02", "title": "暧昧期推进邀约"},
+        {"scenario_code": "R03", "title": "冲突降温"},
+        {"scenario_code": "R04", "title": "确认关系"},
+    ],
+    "judge": {"true_intent": "casual_chat", "best_action": "make_plan", "danger_level": 0.0},
 }
 
 
@@ -68,12 +80,15 @@ def main() -> int:
     target = Path(args.screenshot).expanduser() if args.screenshot else None
 
     demo_settings = {"has_key": args.state != "setup", "relationship": "friends", "context": 10,
-                     "has_deepseek_key": False, "draft_provider": "openrouter", "reply_target": True,
-                     "style": "话少，基本不用标点，急了才发感叹号", "thinking": False}
+                     "has_deepseek_key": False, "has_opencode_key": True,
+                     "draft_provider": "opencode-go", "reply_target": True,
+                     "style": "话少，基本不用标点，急了才发感叹号", "thinking": False,
+                     "default_domain": "romance", "store_history": True}
 
     def save_demo_settings(key, relationship_text, context_n=None,
                            deepseek_key_text=None, draft_provider=None, reply_target_on=None,
-                           style_text=None, thinking_on=None):
+                           style_text=None, thinking_on=None, opencode_key_text=None,
+                           domain_text=None, store_history_on=None):
         if key:
             demo_settings["has_key"] = True
         demo_settings["relationship"] = relationship_text
@@ -81,6 +96,8 @@ def main() -> int:
             demo_settings["context"] = context_n
         if deepseek_key_text:
             demo_settings["has_deepseek_key"] = True
+        if opencode_key_text:
+            demo_settings["has_opencode_key"] = True
         if draft_provider is not None:
             demo_settings["draft_provider"] = draft_provider
         if reply_target_on is not None:
@@ -89,6 +106,10 @@ def main() -> int:
             demo_settings["style"] = style_text
         if thinking_on is not None:
             demo_settings["thinking"] = bool(thinking_on)
+        if domain_text is not None:
+            demo_settings["default_domain"] = domain_text
+        if store_history_on is not None:
+            demo_settings["store_history"] = bool(store_history_on)
 
     # 在创建 Overlay 前替换设置接口，整个事件循环期间都保持隔离。
     with patch.multiple(
@@ -102,6 +123,9 @@ def main() -> int:
         reply_target=lambda: demo_settings["reply_target"],
         style=lambda: demo_settings["style"],
         thinking=lambda: demo_settings["thinking"],
+        has_opencode_key=lambda: demo_settings["has_opencode_key"],
+        default_domain=lambda: demo_settings["default_domain"],
+        store_history=lambda: demo_settings["store_history"],
         save=save_demo_settings,
     ):
         from PySide6.QtCore import QTimer

@@ -41,12 +41,19 @@
   在下拉框里选另一个会话，翻它的记录和上次的建议（那会儿只能看不能填）。
 - **群聊**：每条消息前面的发言人名会一起喂给模型，所以它知道哪句是谁说的；打开「群聊指定回复对象」
   还能选回复给谁，三条候选都按 TA 写，填入时可带「@名字 」前缀（纯文本）。
-- **3 条候选**：每条带 Jev 给的胜出概率百分比，按概率排序，推荐那条置顶并标「推荐回复」；
-  每条都有「填入微信」和复制按钮。
+- **3 条候选**：按 Jev 给的胜出概率排序，推荐那条置顶并标「推荐回复」，每条都有「填入微信」和复制按钮。
+  走了联动重起草时三条是新写的、Jev 没给它们打过概率，这时不显示百分比（免得拿旧稿的概率错位标注）。
 - **判断摘要**：建议动作、可能意图、对方可能需要、紧张度 0–9。
 - **采集开关**：标题栏一拨就停，WGC 会话一起停掉（Win10 的黄框跟着消失），已有候选不受影响。
 - **实时聊天记录**：底部展开，看 OCR 到底读出了什么，认错了一眼就能发现。
-- **起草模型来源可选**：OpenRouter，或 DeepSeek 直连（更快，另填一个 key）。
+- **策略库（SQLite）**：职场 + 恋爱两套沟通策略存在本机 `data/jev.db`，判断前按域路由召回最贴的几条
+  （策略摘要是全英文一句话，注入判断的 state），判断结果再回喂给起草。判断摘要下面会标出命中的域和场景
+  编号（如「策略库 · 职场/工作（S01 S02 S03 S04）」），用了哪几条一眼可追溯。
+- **域路由三级**：联系人档案 > 关系背景里的职场信号 > 设置里的「默认场景域」。Jev 的 `domain_check`
+  若给出高置信（≥0.7）的不同判断，会记进联系人档案，下一轮生效。
+- **翻得出更早的记录**：识别到的消息文本存进本机 SQLite，判断说「先核对聊天记录」而当前窗口不够时，
+  第二跳会带着库里更早的话重判一次。
+- **起草模型来源可选**：OpenCode GO 订阅（默认）、OpenRouter、或 DeepSeek 直连（更快，另填一个 key）。
 - **思考模式开关**：默认关；开了模型先想再写，更斟酌但慢好几倍、贵一些。
 - **参考上下文条数**：3~30，默认 10，起草和判断都按它取最近 N 条。
 - **说话风格**：一句话描述自己的口吻，补在「照着你最近发的消息模仿」之上。
@@ -64,9 +71,12 @@
 - **不碰钱。** 转账、红包、收款相关的界面元素一律不碰，起草的 system prompt 里也禁了这几个话题。
 - **只有对方的新消息到来（或你在群里换了回复对象）才调一次模型。** 静默期零调用——十分钟没人说话
   就是十分钟零 token。
-- **API key 只进环境变量。** `OPENROUTER_API_KEY` 和（选了 DeepSeek 直连才要的）`DEEPSEEK_API_KEY`
-  都写进注册表 `HKCU\Environment`（跟 `setx` 同一个地方），任何文件里都不出现 key，也绝不进日志
-  （报错文本一律脱敏）。
+- **本地存档可关。** 默认把 OCR 出来的消息文本存进本机 SQLite（`data/jev.db`），只用于判断环节翻更早的
+  话；设置里的「本地存聊天记录」一关就完全不写库，判断与起草只看当前窗口。这个库不联网、不上传，
+  删掉文件即清空。
+- **API key 只进环境变量。** `OPENROUTER_API_KEY`、（选了 OpenCode GO 订阅才要的）`OPENCODE_API_KEY`、
+  和（选了 DeepSeek 直连才要的）`DEEPSEEK_API_KEY` 都写进注册表 `HKCU\Environment`（跟 `setx` 同一个
+  地方），任何文件里都不出现 key，也绝不进日志（报错文本一律脱敏）。
 
 什么会出网：只有 `core/` 那两次调用（起草 + 判断/排序）。送出去的是**最近 N 条对话文本**（N = 设置里的
 「参考上下文」，默认 10；群聊带发言人名）、**关系设置**、**你自己最近 12 条 60 字以内的短消息**（当口吻
@@ -83,8 +93,13 @@ WGC 截微信窗口（GPU 合成窗口也能截，被遮挡也能截）
   → 按气泡颜色分 me / her，灰字（引用块、时间戳、群里的发言人名、链接卡片）过滤掉，
     发言人名摘出来挂到它下面那条消息上
   → 跟上一帧比，滚动翻出来的旧消息不重复上报
+  → 消息文本写进本机 SQLite（`data/jev.db`，设置里可关），后续判断能翻更早的话
   → 冒出新的 her 消息才调 core.engine.analyze()
-  → 悬浮窗给判断摘要 + 3 条候选 → 点「填入微信」
+       ├─ 域路由：联系人档案 > 关系背景里的职场信号 > 默认场景域
+       ├─ 按域从 SQLite 召回策略 → 摘要注入判断的 state（「Jev 查数据库」= 应用侧检索注入）
+       ├─ 盲起草 3 条 → Jev 判断 + 排序
+       └─ 若判断说「先核对聊天记录」且库里确有更早的话 → 第二跳带更早历史重判
+  → 悬浮窗给判断摘要 + 策略编号 + 3 条候选 → 点「填入微信」
 ```
 
 截图和 OCR 跑在独立子进程里（一帧 OCR 250~800ms，放 Qt 主线程界面会僵），父进程只管界面和网络调用。
@@ -93,15 +108,23 @@ WGC 截微信窗口（GPU 合成窗口也能截，被遮挡也能截）
 
 | 环节 | 服务 | 模型 | key |
 | --- | --- | --- | --- |
-| 起草 3 条候选 | OpenRouter（默认） | `deepseek/deepseek-v4.1-flash` | `OPENROUTER_API_KEY` |
+| 域路由 + 策略召回 | 本机 SQLite（`data/jev.db`） | —（规则 + 危险等级区间过滤） | 无 |
+| 起草 3 条候选 | OpenCode GO 订阅（默认） | `deepseek-v4.1-flash` | `OPENCODE_API_KEY` |
+| 起草 3 条候选 | OpenRouter | `deepseek/deepseek-v4.1-flash` | `OPENROUTER_API_KEY` |
 | 起草 3 条候选 | DeepSeek 直连（更快，可选） | `deepseek-flash`（DeepSeek-V4.1-Flash） | `DEEPSEEK_API_KEY` |
-| 判断 + 排序 | OpenRouter（`/api/alpha/decisions`） | `typesafe/jev-1.13` | `OPENROUTER_API_KEY` |
+| 判断 + 排序 | Jev decisions API，默认 OpenRouter `/api/alpha/decisions` | `typesafe/jev-1.13` | `OPENROUTER_API_KEY` |
 
-起草走哪家在设置里选；判断和排序永远走 OpenRouter，所以 OpenRouter key 必填。起草是**盲起草**——不把
-Jev 的判断喂给它，让它自己读对话；7 道判断题加一道「哪条候选最合适」一次问完，概率就是卡片上的百分比。
-温度 1.2，`max_tokens` 400；思考模式默认关，开了会带上思考开关、`max_tokens` 提到 4000（DeepSeek 把
-思考过程也算进去，400 会把答案截断）。模型只给出 1~2 条时会带着它的回答追问一次补齐，还不够就按实际
-条数走（少于 2 条就不排序）。
+起草走哪家在设置里选。判断和排序默认走 OpenRouter，可用环境变量换端点与模型：`JEVC_JUDGE_URL` 和
+`JEVC_JUDGE_MODEL` 一起设，key 仍从 `OPENROUTER_API_KEY` 读（变量名沿用，功能上就是「判断层密钥」）。
+
+> 换成第三方 Jev 代理时注意两点：代理通常只认 `jev-latest` 这个模型 id，传 `typesafe/jev-1.13` 会被
+> 拒；且代理延迟明显大于直连（跨境 1.4~8s 很常见），超时别设太紧。
+
+起草是**盲起草**——不把 Jev 的判断喂给它，让它自己读对话；7 道判断题加一道「哪条候选最合适」一次问完，
+概率就是卡片上的百分比。温度 1.2，`max_tokens` 400；思考模式默认关，开了会带上思考开关、`max_tokens`
+提到 4000（DeepSeek 把思考过程也算进去，400 会把答案截断）。模型只给出 1~2 条时会带着它的回答追问一次
+补齐，还不够就按实际条数走（少于 2 条就不排序）。判断落地后，会用命中的 1~2 条策略再起草一次（联动稿），
+三条是同策略不同语气，首位即稳妥版。
 
 ### 为什么走 OCR
 
@@ -125,8 +148,10 @@ Jev 的判断喂给它，让它自己读对话；7 道判断题加一道「哪�
 - **Windows 10 1903+ 或 Windows 11**（Windows Graphics Capture 的最低要求）
 - **Python 3.10+**（Releases 里的 exe 是 CI 用 3.11 打的；只想用 exe 的话不用装 Python）
 - **微信 Windows 4.x**（`Weixin.exe`）
-- **OpenRouter API key**（[openrouter.ai](https://openrouter.ai/)），选了直连再加一个
-  [DeepSeek key](https://platform.deepseek.com/)
+- **判断层密钥**：默认走 OpenRouter，填 [openrouter.ai](https://openrouter.ai/) 的 key；换成第三方 Jev
+  代理就填那家的 key，并用 `JEVC_JUDGE_URL` / `JEVC_JUDGE_MODEL` 指过去（见「模型」一节）
+- **起草层密钥**：默认走 OpenCode GO 订阅（`OPENCODE_API_KEY`）；也可以在设置里改用判断层同一个
+  OpenRouter key，或 [DeepSeek 直连](https://platform.deepseek.com/)（更快，另填一个 key）
 
 > Win10 上 WGC 会在微信窗口外画一圈黄框，系统不给关；Win11 才能关掉。
 > 嫌碍眼就把标题栏的采集开关拨到「已暂停」，黄框立刻消失。
@@ -139,10 +164,20 @@ cd jev-chat-windows
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+
+:: 初始化策略库（职场 23 条 + 恋爱 8 条，离线，不联网）
+python tools/import_strategies.py --manual core/seeds/work_seed.json
+python tools/import_strategies.py --manual core/seeds/romance_seed.json
+python tools/import_strategies.py --check
+
 python main.py
 ```
 
 PyCharm / VS Code 里直接 Run `main.py` 也行。
+
+> 策略库不导入也能跑，只是判断层拿不到策略注入，候选会退化成只看对话本身。
+> 想扩充职场策略走 `--clone`：克隆 [gaoqingshang-skill](https://github.com/wanghoween-design/gaoqingshang-skill)
+> 解析里面的场景文档，加 `--llm` 会用 DeepSeek 提炼英文摘要（需要 `DEEPSEEK_API_KEY`）。
 
 首次启动会自动弹出设置页：填 OpenRouter API key，选你们的关系（恋人 / 朋友 / 同事 / 家人 / 自定义）。
 key 写进注册表 `HKCU\Environment`，重启后依然有效，不落任何文件；其余设置写进项目根的 `config.json`
@@ -167,14 +202,17 @@ pyinstaller --noconfirm --clean jev.spec
 
 | 控件 | 作用 | 存在哪 |
 | --- | --- | --- |
-| 你们的关系 | 恋人/朋友/同事/家人/自定义，起草和判断都按它把握称呼和分寸 | `config.json` → `relationship`（默认 `romantic partners`） |
+| 你们的关系 | 恋人/朋友/同事/家人/自定义，起草和判断都按它把握称呼和分寸；也是域路由的职场信号来源 | `config.json` → `relationship`（默认 `romantic partners`） |
 | 说话风格（可选） | 一句话描述自己的口吻，只喂给起草；留空就只靠最近消息模仿 | `config.json` → `style` |
 | 参考上下文 | 起草和判断各看最近多少条消息，3~30 | `config.json` → `context`（默认 10） |
 | 群聊指定回复对象 | 开了群聊里才有「回复对象」那一行，候选针对 TA 写 | `config.json` → `reply_target`（默认关） |
-| OpenRouter API 密钥 | 判断和排序必用；起草默认也用它。已配置时留空 = 保留 | 注册表 `HKCU\Environment` → `OPENROUTER_API_KEY` |
-| 起草模型来源 | OpenRouter 还是 DeepSeek 直连 | `config.json` → `draft_provider`（`openrouter` / `deepseek`） |
+| 默认场景域 | 联系人档案没记过、关系背景里也看不出职场时，按它取题集和策略库 | `config.json` → `default_domain`（`romance` / `work`，默认 `romance`） |
+| 本地存聊天记录 | 消息文本写进本机 SQLite，供判断翻更早的话；关了只留内存窗口 | `config.json` → `store_history`（默认开） |
+| OpenRouter API 密钥 | 判断层必用（默认走它）。已配置时留空 = 保留 | 注册表 `HKCU\Environment` → `OPENROUTER_API_KEY` |
+| 起草模型来源 | OpenCode GO 订阅 / OpenRouter / DeepSeek 直连 | `config.json` → `draft_provider`（`opencode-go` / `openrouter` / `deepseek`，默认 `opencode-go`） |
+| OpenCode GO 密钥 | 只在选了 GO 订阅时出现，只有起草用它 | 注册表 `HKCU\Environment` → `OPENCODE_API_KEY` |
 | DeepSeek API 密钥 | 只在选了直连时出现，也只有起草用它 | 注册表 `HKCU\Environment` → `DEEPSEEK_API_KEY` |
-| 起草时开启思考模式 | 开了模型先想再写，慢好几倍、贵一些；两种来源都生效 | `config.json` → `thinking`（默认关） |
+| 起草时开启思考模式 | 开了模型先想再写，慢好几倍、贵一些；各来源都生效 | `config.json` → `thinking`（默认关） |
 
 主界面上那几个（标题栏的采集开关、「当前会话」和「回复对象」下拉、「填入时带 @」勾选框）只在内存里，
 不落盘，重启回默认。
@@ -213,14 +251,20 @@ app/                    UI + 采集层
   overlay.py            置顶悬浮窗：会话/回复对象、判断摘要、3 条候选、聊天记录、设置页（PySide6 + Fluent）
   settings.py           两个 key 只进注册表，其余设置落 config.json
 core/                   Jev 判断内核，平台无关，跟安卓原版同一套口径
-  engine.py             唯一入口 analyze(messages, relationship) → 候选 + 排序 + 判断
-  jev_client.py         Jev 判断 API 客户端（stdlib、脱敏、429/529 退避）
-  questions.py          7 道判断题 + build_state() + build_rank_question()
-  draft.py              起草 3 条候选（OpenRouter / DeepSeek 直连）
+  engine.py             唯一入口：域路由 → 召回策略 → 盲起草 → Jev 判断排序 → 联动重起草
+  store.py              SQLite 数据层：策略表 / 消息表 / 联系人档案表（唯一 DB 入口）
+  seeds/                策略种子数据（职场 + 恋爱两套，导入用，随仓库提交）
+  jev_client.py         Jev 判断 API 客户端（stdlib、脱敏、429/529 退避、端点可用环境变量换）
+  questions.py          分层判断题集（COMMON + 域题 + 排序题）+ build_state()
+  draft.py              起草 3 条候选（OpenCode GO / OpenRouter / DeepSeek 直连）
 tools/
   demo.py               端到端冒烟：拿一段写死的对话跑完整链（需 key + 联网）
+  questions_smoke.py    题集结构冒烟：断言分层、语言、条数、域不串（不联网、不需 key）
+  import_strategies.py  策略种子导入 SQLite（`--check` 只校验覆盖率，不写库）
   preview_ui.py         用合成数据预览界面，不采集不联网不碰微信；可 --screenshot 出图
   make_icon.py          生成 docs/icon.ico（打包图标），图标已提交，换颜色才用重跑
+run-demo.bat            本机验证辅助：从 key 目录读密钥后跑 demo（纯 ASCII；非上游发行物）
+data/jev.db             本机数据库（策略 + 消息 + 联系人），不进仓库
 probe/                  一次性探针，结论已写进本文，留着是为了可复现
   probe_win.py          UIA 能不能读微信聊天文字 → 证伪（树是空的）
   probe_win2.py         UIA 证伪 v2：分清「树是空的」和「有树没文字」，顺带试 LegacyIAccessible
@@ -239,9 +283,9 @@ docs/ui_*.png           README 里那三张截图，tools/preview_ui.py --screen
 config.json             你自己的设置，不进仓库（在 .gitignore 里）
 ```
 
-`tools/` 和 `probe/` 里的脚本都按「项目根在 `PYTHONPATH` 里」写（PyCharm 默认会把内容根加进去）。
-命令行跑 `tools/demo.py` 得自己带上：`set PYTHONPATH=. && python tools/demo.py`。
-代码里没有 `sys.path` 补丁。
+`probe/` 里的脚本都按「项目根在 `PYTHONPATH` 里」写（PyCharm 默认会把内容根加进去），命令行跑要自己带上：
+`set PYTHONPATH=. && python probe/probe_ocr.py`。`tools/` 里的脚本自己补了 `sys.path`，
+`python tools/demo.py` 直接就能跑。
 
 ## 已知限制 / 路线图
 
@@ -261,6 +305,18 @@ config.json             你自己的设置，不进仓库（在 .gitignore 里�
 - **没有托盘**：关窗口就是退出（标题栏的「最小化」是收到任务栏，不是后台常驻）。
 
 ## 更新记录
+
+**v0.2.0**
+- 策略库：策略从硬编码搬进 SQLite（`core/store.py` + `core/seeds/`，职场 23 条 + 恋爱 8 条），判断前按域
+  和危险等级区间召回并注入 state，判断结果再回喂起草（联动稿）
+- 域路由三级：联系人档案 > 关系背景里的职场信号 > 设置里的「默认场景域」；Jev `domain_check` 高置信
+  （≥0.7）时自动记进联系人档案，下一轮生效
+- 消息落库：识别到的消息写进本机 SQLite；判断说「先核对聊天记录」且窗口内不够时，第二跳带库里更早的
+  记录重判一次
+- 设置页补齐：起草来源加 OpenCode GO 订阅（默认）及其密钥，新增「默认场景域」「本地存聊天记录」
+- 悬浮窗判断摘要下方标出命中的域与策略编号（如「策略库 · 职场/工作（S01 S02 S03 S04）」）
+- 新增 `tools/questions_smoke.py`（题集结构冒烟）与 `tools/import_strategies.py`（策略导入 + 覆盖率校验）
+- 判断层端点可用 `JEVC_JUDGE_URL` / `JEVC_JUDGE_MODEL` 整体换走（官方直连 / OpenRouter / 第三方代理均可）
 
 **v0.1.3**
 - 起草去 AI 味：中文反模板 system prompt、拿自己最近的消息当口吻样本、可选「说话风格」设置、

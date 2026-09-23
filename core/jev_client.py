@@ -13,6 +13,12 @@ API_URL = "https://openrouter.ai/api/alpha/decisions"
 MODEL = "typesafe/jev-1.13"
 MAX_RETRIES = 3
 
+# 判断层端点/模型可被环境变量覆盖（标准协议不保证，仅 URL+key 换目标；协议仍按 Jev decisions API）：
+#   JEVC_JUDGE_URL / JEVC_JUDGE_MODEL / OPENROUTER_API_KEY
+def judge_endpoint() -> tuple[str, str]:
+    return (os.environ.get("JEVC_JUDGE_URL") or API_URL,
+            os.environ.get("JEVC_JUDGE_MODEL") or MODEL)
+
 
 class JevError(Exception):
     def __init__(self, message: str, status: int | None = None) -> None:
@@ -56,8 +62,9 @@ def ask(state: dict, questions: dict, timeout: float = 20) -> dict:
     Never prints or writes the API key.
     """
     key = _api_key()
+    url, model = judge_endpoint()
     payload = json.dumps(
-        {"model": MODEL, "state": state, "questions": questions},
+        {"model": model, "state": state, "questions": questions},
         ensure_ascii=False,
     ).encode("utf-8")
 
@@ -65,7 +72,7 @@ def ask(state: dict, questions: dict, timeout: float = 20) -> dict:
     last_body = ""
     for attempt in range(MAX_RETRIES + 1):
         req = urllib.request.Request(
-            API_URL,
+            url,
             data=payload,
             method="POST",
             headers={
