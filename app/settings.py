@@ -88,6 +88,15 @@ def debug_view() -> bool:
     """调试视图：另开一个窗口实时画识别框。默认关，开了子进程才往队列里送帧。"""
     return bool(_read("debug_view", False))
 
+def default_domain() -> str:
+    """默认场景域（core.strategy 插件用）：联系人没覆盖、无职场信号时取题集和策略库按这个域。"""
+    v = _read("default_domain")
+    return v if v in ("work", "romance") else "romance"
+
+def store_history() -> bool:
+    """本地存聊天记录（core.strategy 插件用）：OCR 消息文本存本机 SQLite 供翻更早的话。默认开。"""
+    return bool(_read("store_history", True))
+
 def _read_env(env_name: str) -> str:
     """进程环境优先；没有就读注册表并带进进程环境，之后 core/ 里按 os.environ 读就有了。"""
     v = os.environ.get(env_name, "").strip()
@@ -142,7 +151,8 @@ def save(relationship_text: str | None = None, context_n: int | None = None, *,
          llm_key_text: str | None = None, draft_model_text: str | None = None,
          draft_base_url_text: str | None = None, reply_target_on: bool | None = None,
          style_text: str | None = None, thinking_on: bool | None = None,
-         check_update_on: bool | None = None, debug_view_on: bool | None = None) -> None:
+         check_update_on: bool | None = None, debug_view_on: bool | None = None,
+         domain_text: str | None = None, store_history_on: bool | None = None) -> None:
     """每个参数为空/None = 保留当前值。两把 key 写进程环境 + HKCU\\Environment，不写任何文件。"""
     jev = jev_provider_text if jev_provider_text in JEV_PROVIDERS else jev_provider()
     draft = draft_provider_text if draft_provider_text in DRAFT_PROVIDERS else draft_provider()
@@ -168,6 +178,9 @@ def save(relationship_text: str | None = None, context_n: int | None = None, *,
         "thinking": flag(thinking_on, thinking),
         "check_update": flag(check_update_on, check_update),
         "debug_view": flag(debug_view_on, debug_view),
+        # 策略库插件（core.strategy）的两项；钩子层直接 _read()，这里只是让设置页能改
+        "default_domain": domain_text if domain_text in ("work", "romance") else default_domain(),
+        "store_history": flag(store_history_on, store_history),
     }
     with open(_CONFIG, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False)

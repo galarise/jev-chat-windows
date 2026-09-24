@@ -106,6 +106,22 @@ DeepSeek 官方 API（`api.deepseek.com`）国内直连，起草基本就是一�
 - **新版本提示**：启动时（可关）查一次 GitHub 最新版本号，有新版本会在标题栏下面出现一条提示，
   点「去下载」跳转 Release 页。
 
+### 策略库插件（可选，`core/strategy/`）
+
+在上游三段式管线上以钩子插件形式接入的策略增强层，不装就完全没有这部分：
+
+- **域路由**：职场 / 恋爱两套判断题集和策略库。联系人档案 > 关系背景里的职场信号 > 设置里的「默认场景域」；
+  Jev 的 domain_check 若给出高置信（≥0.7）的不同判断，会记进联系人档案，下一轮生效。
+- **策略召回注入**：判断前按域召回本机 SQLite 策略（≤4 条，摘要全英文），注入判断的 state；
+  判断结果和策略话术再喂给起草小抄。判断摘要下会标出命中的域和场景编号（如「策略库 · 职场/工作（S01 S02）」）。
+- **翻得出更早的记录**：「本地存聊天记录」开着时（默认开），识别到的消息文本存进本机 `data/jev.db`；
+  判断说「先核对聊天记录」而当前窗口不够时，第二跳带着库里更早的话重判一次。
+- **导入 / 冒烟**：`python tools/import_strategies.py --clone --llm` 从 MIT 源仓库导入职场话术（也可用
+  `core/strategy/seeds/` 的种子 JSON）；`python tools/questions_smoke.py` 校验题集结构（不联网）。
+
+插件挂接走 `core/hooks.py` 的四个扩展点（默认空实现，装不装都不影响上游行为）；
+`main.py` 启动时调 `core.strategy.install()`。
+
 ## 隐私与边界
 
 这是个人自用工具，下面几条是硬约束，代码里就是这么写的：
@@ -275,6 +291,8 @@ pyinstaller --noconfirm --clean jev.spec
 | 说话风格（可选） | 一句话描述自己的口吻，只喂给起草；留空就只靠最近消息模仿 | `config.json` → `style` |
 | 参考上下文 | 起草和判断各看最近多少条消息，3~30 | `config.json` → `context`（默认 10） |
 | 群聊指定回复对象 | 开了群聊里才有「回复对象」那一行，候选针对 TA 写 | `config.json` → `reply_target`（默认关） |
+| 默认场景域 | 策略库插件用：联系人没记域、也没职场信号时按它取题集和策略库 | `config.json` → `default_domain`（默认 `romance`） |
+| 本地存聊天记录 | 策略库插件用：识别到的消息文本存本机 SQLite，供判断翻更早的话 | `config.json` → `store_history`（默认开） |
 | 启动时检查更新 | 开了才在启动时查一次 GitHub 最新版本号，有新版本就在标题栏下面提示 | `config.json` → `check_update`（默认开） |
 | 调试视图 | 另开一个窗口实时显示截到的画面和识别框，看识别在哪一步认错。拨一下立刻生效，不用点保存；关掉那个窗口等于关掉开关 | `config.json` → `debug_view`（默认关） |
 | 判断 · 来源 | OpenRouter 还是 TypeSafe 直连 | `config.json` → `jev_provider`（默认 `openrouter`） |
@@ -330,8 +348,12 @@ core/                   Jev 判断内核，平台无关，跟安卓原版同一�
   jev_client.py         Jev 判断客户端：OpenRouter（urllib）/ TypeSafe 直连（typesafe-sdk）；脱敏、退避
   questions.py          7 道判断题 + build_state() + build_rank_question() + 判断小抄 guidance_text() / 中文标签 CHOICE_LABELS
   draft.py              起草 3 条候选：拼提示词、解析、过滤、不足时追问补齐；调用走 llm.py
+  hooks.py              管线扩展钩子（enrich_state / judge_questions / augment_guidance / after_analyze），默认空实现
+  strategy/             策略库插件（可选）：store.py SQLite 三表、questions.py 域题集、engine_hooks.py 钩子实现、seeds/ 种子
 tools/
-  demo.py               端到端冒烟：拿一段写死的对话跑完整链（需 key + 联网）
+  demo.py               端到端冒烟：恋爱 + 职场两套对话跑完整链（需 key + 联网），--sample 可单跑
+  import_strategies.py  策略库插件：从 MIT 源仓库导入职场话术到 SQLite（--clone/--llm/--check/--manual）
+  questions_smoke.py    题集结构本地冒烟：不联网，校验分层结构 / 语言 / 域不串
   preview_ui.py         用合成数据预览界面（含 --state debug 的调试视图），不采集不联网不碰微信；可 --screenshot 出图
   make_icon.py          生成 docs/icon.ico（打包图标），图标已提交，换颜色才用重跑
 probe/                  一次性探针，结论已写进本文，留着是为了可复现

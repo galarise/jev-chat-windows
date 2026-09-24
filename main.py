@@ -20,6 +20,12 @@ from app.overlay import Overlay
 from app.version import VERSION
 from core.engine import analyze
 
+try:  # 策略库插件（可选）：装上才走域路由/策略召回/翻历史，装不上就全走原版行为
+    from core.strategy import install as _strategy_install
+    from core.strategy import store as _strategy_store
+except ImportError:  # 没这个包 = 纯上游
+    _strategy_install = _strategy_store = None
+
 # {会话名: {history, result, rev, target, senders}}：每个会话各自的上下文、上次结果和版本号，互不串味
 # history 里是 [(who, text, name)]，engine 只认 her/me，name 是群里的发言人（单聊/自己说的是 None）；
 # 只是缓冲区，实际喂模型几条由设置里的「参考上下文」决定
@@ -112,7 +118,8 @@ def analyze_bg(msgs, title, revision, reply_to=None):
                                    reply_to=reply_to, style=settings.style(),
                                    thinking=settings.thinking(),
                                    jev_provider=settings.jev_provider(),
-                                   jev_model=settings.jev_model() or None),
+                                   jev_model=settings.jev_model() or None,
+                                   chat_key=title),
                      title, revision))
     except Exception as e:
         results.put(("err", f"分析失败: {e}", title, revision))
@@ -210,6 +217,11 @@ def drain():
                 if name in chat["senders"]:
                     chat["senders"].remove(name)
                 chat["senders"].insert(0, name)
+        if _strategy_store is not None and settings.store_history():  # 本地存档（可选插件）
+            try:  # 库里 sender 只认 her/me，与 engine 消费端保持一致
+                _strategy_store.append_messages(title, [(w, t) for w, _, t in new])
+            except Exception:
+                traceback.print_exc()  # 存档失败不该挡正常回复
         ov.set_targets(title, chat["senders"], target_of(title))  # 显不显示这一行由悬浮窗按开关决定
         if new[-1][0] == "her":  # 只有对方最新说话才值得分析
             msgs = list(chat["history"])
@@ -265,6 +277,8 @@ if __name__ == "__main__":  # Windows 的 spawn 会让子进程重新执行本�
                  on_target_change=on_target_change, on_toggle_debug=set_debug,
                  result_of=lambda t: chats.get(t, {}).get("result"))
     child = dbg = None
+    if _strategy_install is not None:
+        _strategy_install()  # 幂等；库打不开时插件自己降级，不挡正常回复
     try:
         state["hwnd"] = find_wechat_hwnd()
     except RuntimeError:

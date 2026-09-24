@@ -435,6 +435,10 @@ class Overlay:
         insight_box.addWidget(self.summary)
         self.intent = _label("", 12, _MUTED)
         insight_box.addWidget(self.intent)
+        self.policy = _label("", 11, _MUTED)  # 策略库插件：命中的域 + 召回的场景编号，来源可追溯
+        self.policy.setWordWrap(True)
+        self.policy.hide()
+        insight_box.addWidget(self.policy)
         self.insight.setToolTip("根据当前聊天片段推测，可能理解有偏差。紧张度为 0–9 的参考评分。")
         self.insight.hide()
         body.addWidget(self.insight)
@@ -537,6 +541,29 @@ class Overlay:
         box.addLayout(target_row)
         box.addWidget(self._hint(
             "开了以后群聊里可以选回复给谁，候选会针对 TA 写，填入时可带 @。关了就正常回复。"
+        ))
+        domain_row = QHBoxLayout()
+        domain_row.addWidget(_label("默认场景域", 13), 1)
+        self.domainBox = ComboBox()
+        self.domainBox.setMinimumWidth(0)
+        self.domainBox.addItems(["恋爱 / 人际", "职场 / 工作"])
+        self.domainBox.setAccessibleName("默认场景域")
+        domain_row.addWidget(self.domainBox)
+        box.addLayout(domain_row)
+        box.addWidget(self._hint(
+            "策略库插件（core.strategy）用：联系人的域没记过、也没从关系背景里看出职场信号时，按这个域取题集和策略库。"
+        ))
+        store_row = QHBoxLayout()
+        store_row.addWidget(_label("本地存聊天记录", 13), 1)
+        self.storeSwitch = SwitchButton()
+        self.storeSwitch.setOnText("开")
+        self.storeSwitch.setOffText("关")
+        self.storeSwitch.setAccessibleName("本地存聊天记录")
+        store_row.addWidget(self.storeSwitch)
+        box.addLayout(store_row)
+        box.addWidget(self._hint(
+            "策略库插件（core.strategy）用：把识别到的消息文本存进本机 SQLite，"
+            "供「先核对聊天记录」这类判断翻更早的话。只存本机，关掉后判断与起草只看当前窗口。"
         ))
         update_row = QHBoxLayout()
         update_row.addWidget(_label("启动时检查更新", 13), 1)
@@ -774,6 +801,8 @@ class Overlay:
         self.styleEdit.setText(settings.style())
         self.contextBox.setValue(settings.context())
         self.targetSwitch.setChecked(settings.reply_target())
+        self.domainBox.setCurrentIndex(1 if settings.default_domain() == "work" else 0)
+        self.storeSwitch.setChecked(settings.store_history())
         self._set_group(self.jev, settings.jev_provider(), settings.jev_model())
         self._set_group(self.draft, settings.draft_provider(), settings.draft_model())
         self.baseEdit.setText(settings.draft_base_url())
@@ -817,6 +846,8 @@ class Overlay:
                           draft_model_text=self.draft.modelBox.text().strip(),
                           draft_base_url_text=base,
                           reply_target_on=self.targetSwitch.isChecked(),
+                          domain_text=("work" if self.domainBox.currentIndex() == 1 else "romance"),
+                          store_history_on=self.storeSwitch.isChecked(),
                           style_text=self.styleEdit.text().strip(),
                           thinking_on=self.thinkingSwitch.isChecked(),
                           check_update_on=self.updateSwitch.isChecked())
@@ -1136,6 +1167,14 @@ class Overlay:
         self.summary.setText("建议：" + _choice(answers, "best_action"))
         self.intent.setText("可能意图 · " + _choice(answers, "true_intent") +
                             "\n可能需要 · " + _choice(answers, "she_needs"))
+        domain_text = {"romance": "恋爱/人际", "work": "职场/工作"}.get(result.get("domain"))
+        codes = [s.get("scenario_code") for s in (result.get("strategies") or [])
+                 if s.get("scenario_code")]
+        if domain_text:
+            self.policy.setText(
+                "策略库 · " + domain_text +
+                ("（" + " ".join(codes) + "）" if codes else "（未召回，按通用题集判断）"))
+        self.policy.setVisible(bool(domain_text) and bool(self.cands))
         score = (answers.get("danger_level") or {}).get("score")
         valid_score = isinstance(score, (int, float)) and isfinite(score) and 0 <= score <= 9
         self.tension.setText(f"紧张度 {score:.0f}/9" if valid_score else "紧张度待判断")
