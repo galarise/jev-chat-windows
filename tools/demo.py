@@ -26,6 +26,12 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="repla
 from core.engine import analyze
 from core.jev_client import JevError
 
+try:  # 策略库插件：装上才走域路由/策略召回（demo 的域不串断言依赖 work/romance 题集切换）
+    from core.strategy import install as _install
+    _install()
+except ImportError:
+    pass
+
 SAMPLES = {
     "romance": {
         "name": "恋爱样例（忠诚试探）",
@@ -53,8 +59,17 @@ SAMPLES = {
                   "且不出现恋爱专属选项（apologize/confirm_you_care/vent_anger）",
     },
 }
-PROVIDER = "deepseek"        # 起草来源，见 core.providers.DRAFT_PROVIDERS
-JEV_PROVIDER = "openrouter"  # 判断来源：openrouter 或 typesafe
+PROVIDER = "opencode"        # 起草来源，见 core.providers.DRAFT_PROVIDERS
+JEV_PROVIDER = "jevtypesafeai"  # 判断来源：openrouter / typesafe / jevtypesafeai
+# 环境变量兜底要在 import core 之前做：core 里只读 os.environ，注册表兜底是 app 层的职责
+try:
+    from app import settings as _settings  # noqa: E402
+    _settings.has_jev_key()  # 触发注册表兜底，把两把 key 都带进进程环境
+    _settings.has_llm_key()
+    PROVIDER = _settings.draft_provider()
+    JEV_PROVIDER = _settings.jev_provider()
+except ImportError:
+    pass
 
 _ROMANCE_ONLY = {"apologize", "confirm_you_care", "vent_anger", "care"}
 _WORK_ONLY = {"blame_shift", "escalate_explicitly", "take_responsibility"}

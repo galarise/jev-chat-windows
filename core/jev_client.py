@@ -17,10 +17,10 @@ import urllib.request
 from typing import NoReturn
 
 try:  # 当模块导入 / 当脚本直接跑 都能用
-    from .providers import (ENV_VARS, JEV_ENV, JEV_PROVIDERS, LEGACY,
+    from .providers import (ENV_VARS, JEVHOSTED_DECISIONS, JEV_ENV, JEV_PROVIDERS, LEGACY,
                             OPENROUTER_DECISIONS, OPENROUTER_KEY_URL, TYPESAFE_BASE)
 except ImportError:
-    from providers import (ENV_VARS, JEV_ENV, JEV_PROVIDERS, LEGACY,
+    from providers import (ENV_VARS, JEVHOSTED_DECISIONS, JEV_ENV, JEV_PROVIDERS, LEGACY,
                            OPENROUTER_DECISIONS, OPENROUTER_KEY_URL, TYPESAFE_BASE)
 
 MAX_RETRIES = 3
@@ -97,6 +97,9 @@ def ask(state: dict, questions: dict, timeout: float = 20,
     model = model or spec.default
     if provider == "typesafe":
         return _ask_typesafe(state, questions, key, model, timeout)
+    if provider == "jevtypesafeai":
+        return _ask_openrouter(state, questions, key, model, timeout, JEVHOSTED_DECISIONS,
+                               "Jev 判断")
     return _ask_openrouter(state, questions, key, model, timeout)
 
 
@@ -131,8 +134,10 @@ def _ask_typesafe(state: dict, questions: dict, key: str, model: str, timeout: f
     }
 
 
-def _ask_openrouter(state: dict, questions: dict, key: str, model: str, timeout: float) -> dict:
-    """OpenRouter 的 /api/alpha/decisions，手写 urllib。429/529 退避重试 3 次。"""
+def _ask_openrouter(state: dict, questions: dict, key: str, model: str, timeout: float,
+                    url: str = OPENROUTER_DECISIONS, what: str = "Jev 判断") -> dict:
+    """decisions 类端点，手写 urllib。OpenRouter 的 /api/alpha/decisions 和
+    JevTypeSafeAI 托管 /api/v1/decide 是同一个形状，共用这条路。429/529 退避重试 3 次。"""
     payload = json.dumps(
         {"model": model, "state": state, "questions": questions},
         ensure_ascii=False,
@@ -142,7 +147,7 @@ def _ask_openrouter(state: dict, questions: dict, key: str, model: str, timeout:
     last_body = ""
     for attempt in range(MAX_RETRIES + 1):
         req = urllib.request.Request(
-            OPENROUTER_DECISIONS,
+            url,
             data=payload,
             method="POST",
             headers={
@@ -214,6 +219,10 @@ def list_models(provider: str, key: str, timeout: float = 10) -> list[str]:
                 return sorted({m.name for m in client.models.list().models})
         except Exception as exc:
             _fail(exc, "取模型列表")
+    if provider == "jevtypesafeai":
+        # 托管端点没有便宜的探测/列模型端点（全 405），key 对不对只有打一次 decide 才知道。
+        # 列表写死，真实校验发生在第一次判断（错误消息会带出具体原因）。
+        return ["jev-latest", "jev-1.13"]
     # OpenRouter 的 Jev 是 Decisions API 专属模型，不在 /api/v1/models 目录里
     # （也没有列它的专用端点），列表按官方模型页写死，别名列排最前（永远指向最新版）。
     # key 对不对由探测兜着，别让坏密钥等到第一次判断才暴露。

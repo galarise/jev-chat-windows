@@ -13,10 +13,12 @@ import threading
 import traceback
 from collections import deque
 
+# 顺序敏感：先 import Qt 相关的 overlay（把 Qt 的 DLL 拉起来），再 import worker
+# （它带 rapidocr/onnxruntime）。反过来在部分 Windows 机器上直接段错误。
+from app.overlay import Overlay
 from app import settings, update, worker
 from app.capture import find_wechat_hwnd
 from app.fill import fill
-from app.overlay import Overlay
 from app.version import VERSION
 from core.engine import analyze
 

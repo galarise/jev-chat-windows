@@ -18,6 +18,9 @@ OPENROUTER_DECISIONS = "https://openrouter.ai/api/alpha/decisions"
 # 免费的密钥探测端点：Jev 模型不在 /models 目录里（列表写死），key 对不对靠它验
 OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/auth/key"
 TYPESAFE_BASE = "https://api.typesafe.ai"
+# JevTypeSafeAI 托管端点（jv_live_ key）：跟官方 /v1/systemone 同一套 choice/score/noul API，
+# 但官方端点不认 jv_live 的 key，托管端点才认。手写 urllib，见 jev_client._ask_jevhosted。
+JEVHOSTED_DECISIONS = "https://jevtypesafeai.com/api/v1/decide"
 
 JEV_ENV = "JEV_API_KEY"    # 判断那把，不管选 OpenRouter 还是 TypeSafe
 LLM_ENV = "LLM_API_KEY"    # 起草那把，不管选哪家语言模型
@@ -28,6 +31,7 @@ _Jev = namedtuple("_Jev", "name default")
 JEV_PROVIDERS = {
     "openrouter": _Jev("OpenRouter", "typesafe/jev-1.13"),
     "typesafe": _Jev("TypeSafe 直连", "jev-latest"),
+    "jevtypesafeai": _Jev("JevTypeSafeAI 托管", "jev-latest"),
 }
 
 # protocol ∈ {openai, anthropic, gemini}：决定 core/llm.py 用哪个官方 SDK
@@ -58,7 +62,9 @@ DRAFT_PROVIDERS = {  # 第一个就是默认：DeepSeek 官网直连
                         "https://dashscope.aliyuncs.com/compatible-mode/v1", "", _NONE),
     "siliconflow": _Draft("硅基流动", "openai", "https://api.siliconflow.cn/v1", "", _NONE),
     "opencode": _Draft("OpenCode Go", "openai", "https://opencode.ai/zen/go/v1",
-                       "deepseek-v4.1-flash", _NONE, _OPENCODE_HEADERS, _opencode_chat),
+                       "deepseek-v4.1-flash",
+                       lambda on: {"thinking": {"type": "enabled" if on else "disabled"}},
+                       _OPENCODE_HEADERS, _opencode_chat),
     "anthropic": _Draft("Anthropic", "anthropic", "https://api.anthropic.com", "", _NONE),
     "gemini": _Draft("Google Gemini", "gemini", "", "", _NONE),
     "custom_openai": _Draft("自定义 · OpenAI 兼容", "openai", "", "", _NONE),
@@ -87,7 +93,9 @@ if __name__ == "__main__":
     assert DRAFT_PROVIDERS["deepseek"].headers is None and DRAFT_PROVIDERS["deepseek"].keep is None
     go = DRAFT_PROVIDERS["opencode"]
     assert go.protocol == "openai" and go.base == "https://opencode.ai/zen/go/v1"
-    assert go.default == "deepseek-v4.1-flash" and go.extra(True) == {}
+    assert go.default == "deepseek-v4.1-flash"
+    assert go.extra(True) == {"thinking": {"type": "enabled"}}
+    assert go.extra(False) == {"thinking": {"type": "disabled"}}
     uuid.UUID(go.headers["x-opencode-session"])
     assert go.headers["User-Agent"] == "jev-chat-windows" and "key" not in go.headers
     assert go.keep("deepseek-v4.1-flash") and go.keep("glm-5.3") and go.keep("hy3")
